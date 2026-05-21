@@ -6,20 +6,17 @@ import (
 	"strings"
 )
 
-// New строит slog.Logger. В production использует JSON-хендлер, иначе — текстовый.
-// Невалидный level откатывается на info.
+const envProduction = "production"
+
 func New(level, env string) *slog.Logger {
-	opts := &slog.HandlerOptions{
-		Level: parseLevel(level),
-	}
+	opts := &slog.HandlerOptions{Level: parseLevel(level)}
 
 	var handler slog.Handler
-	if env == "production" {
+	if strings.EqualFold(env, envProduction) {
 		handler = slog.NewJSONHandler(os.Stdout, opts)
 	} else {
 		handler = slog.NewTextHandler(os.Stdout, opts)
 	}
-
 	return slog.New(handler)
 }
 
