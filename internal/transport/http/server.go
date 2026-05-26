@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/YuriyDubinin/digix-api/internal/config"
+	"github.com/YuriyDubinin/dijex-api/internal/config"
 )
 
 type Server struct {

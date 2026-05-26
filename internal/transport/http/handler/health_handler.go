@@ -3,7 +3,7 @@ package handler
 import (
 	"net/http"
 
-	"github.com/YuriyDubinin/digix-api/internal/transport/http/response"
+	"github.com/YuriyDubinin/dijex-api/internal/transport/http/response"
 )
 
 type HealthHandler struct{}

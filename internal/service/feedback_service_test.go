@@ -11,7 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/YuriyDubinin/digix-api/internal/domain"
+	"github.com/YuriyDubinin/dijex-api/internal/domain"
 )
 
 type mockRepo struct {

@@ -6,8 +6,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/YuriyDubinin/digix-api/internal/transport/http/handler"
-	mw "github.com/YuriyDubinin/digix-api/internal/transport/http/middleware"
+	"github.com/YuriyDubinin/dijex-api/internal/transport/http/handler"
+	mw "github.com/YuriyDubinin/dijex-api/internal/transport/http/middleware"
 )
 
 type Deps struct {

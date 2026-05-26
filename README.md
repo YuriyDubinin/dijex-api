@@ -1,12 +1,29 @@
-# Digix API
+# Dijex API
 
 ## Запуск
 ```
-docker build -t digix-api .
+docker build -t dijex-api .
 ```
 
 ```
-docker run -d --name digix-api --env-file .env -p 18080:8080 digix-api
+docker run -d --name dijex-api --env-file .env -p 18080:8080 dijex-api
+```
+
+## Деплой
+```
+docker build --platform linux/amd64 -t yuriydubinin100/dijex-api:1.0.0 .
+```
+
+```
+docker push yuriydubinin100/dijex-api:1.0.0
+```
+
+```
+docker pull yuriydubinin100/dijex-api:1.0.0
+```
+
+```
+docker run -d --name dijex-api --env-file .env -p 18080:8080 yuriydubinin100/dijex-api:1.0.0
 ```
 
 ## Эндпоинты
@@ -56,4 +73,5 @@ docker run -d --name digix-api --env-file .env -p 18080:8080 digix-api
 
 - `400 INVALID_JSON` — невалидный JSON или лишние поля.
 - `422 VALIDATION_ERROR` — нарушены правила валидации. В `details` — список полей с проблемами.
-- `500 INTERNAL_ERROR` — внутренняя ошибка (смотри `docker logs digix-api`).
+- `500 INTERNAL_ERROR` — внутренняя ошибка (смотри `docker logs dijex-api`).
+

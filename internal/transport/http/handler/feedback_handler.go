@@ -7,12 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/YuriyDubinin/digix-api/internal/domain"
-	"github.com/YuriyDubinin/digix-api/internal/service"
-	"github.com/YuriyDubinin/digix-api/internal/transport/http/dto"
-	mw "github.com/YuriyDubinin/digix-api/internal/transport/http/middleware"
-	"github.com/YuriyDubinin/digix-api/internal/transport/http/response"
-	"github.com/YuriyDubinin/digix-api/pkg/validator"
+	"github.com/YuriyDubinin/dijex-api/internal/domain"
+	"github.com/YuriyDubinin/dijex-api/internal/service"
+	"github.com/YuriyDubinin/dijex-api/internal/transport/http/dto"
+	mw "github.com/YuriyDubinin/dijex-api/internal/transport/http/middleware"
+	"github.com/YuriyDubinin/dijex-api/internal/transport/http/response"
+	"github.com/YuriyDubinin/dijex-api/pkg/validator"
 )
 
 const maxRequestBody = 1 << 20 // 1 MiB

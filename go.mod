@@ -1,4 +1,4 @@
-module github.com/YuriyDubinin/digix-api
+module github.com/YuriyDubinin/dijex-api
 
 go 1.25.0
 

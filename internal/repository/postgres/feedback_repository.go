@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/YuriyDubinin/digix-api/internal/domain"
+	"github.com/YuriyDubinin/dijex-api/internal/domain"
 )
 
 type FeedbackRepository struct {

@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/YuriyDubinin/digix-api/internal/service"
+	"github.com/YuriyDubinin/dijex-api/internal/service"
 )
 
 type CreateFeedbackHTTPRequest struct {

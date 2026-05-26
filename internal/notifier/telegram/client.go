@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/YuriyDubinin/digix-api/internal/domain"
+	"github.com/YuriyDubinin/dijex-api/internal/domain"
 )
 
 const (

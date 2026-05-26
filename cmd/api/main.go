@@ -7,14 +7,14 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/YuriyDubinin/digix-api/internal/config"
-	"github.com/YuriyDubinin/digix-api/internal/notifier/telegram"
-	"github.com/YuriyDubinin/digix-api/internal/repository/postgres"
-	"github.com/YuriyDubinin/digix-api/internal/service"
-	transporthttp "github.com/YuriyDubinin/digix-api/internal/transport/http"
-	"github.com/YuriyDubinin/digix-api/internal/transport/http/handler"
-	"github.com/YuriyDubinin/digix-api/pkg/logger"
-	"github.com/YuriyDubinin/digix-api/pkg/validator"
+	"github.com/YuriyDubinin/dijex-api/internal/config"
+	"github.com/YuriyDubinin/dijex-api/internal/notifier/telegram"
+	"github.com/YuriyDubinin/dijex-api/internal/repository/postgres"
+	"github.com/YuriyDubinin/dijex-api/internal/service"
+	transporthttp "github.com/YuriyDubinin/dijex-api/internal/transport/http"
+	"github.com/YuriyDubinin/dijex-api/internal/transport/http/handler"
+	"github.com/YuriyDubinin/dijex-api/pkg/logger"
+	"github.com/YuriyDubinin/dijex-api/pkg/validator"
 )
 
 func main() {
