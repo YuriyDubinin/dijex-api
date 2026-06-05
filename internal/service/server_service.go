@@ -15,6 +15,7 @@ import (
 	"github.com/YuriyDubinin/dijex-api/internal/docker"
 	"github.com/YuriyDubinin/dijex-api/internal/domain"
 	"github.com/YuriyDubinin/dijex-api/internal/geo"
+	"github.com/YuriyDubinin/dijex-api/internal/remotedeploy"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
 	"github.com/YuriyDubinin/dijex-api/internal/sshclient"
 	"github.com/YuriyDubinin/dijex-api/internal/sshkey"
@@ -59,6 +60,13 @@ type remoteServicesCollector interface {
 	Collect(ctx context.Context, client *ssh.Client) *systemd.ServicesInfo
 }
 
+// remoteDeployer — контракт выполнения деплоя на удалённый сервер.
+// Реализуется *remotedeploy.Runner. nil допустим — тогда метод Deploy вернёт
+// ошибку конфигурации.
+type remoteDeployer interface {
+	Run(ctx context.Context, client *ssh.Client, params remotedeploy.DeployParams) *remotedeploy.DeployResult
+}
+
 // serverKeyProvider — контракт получения публичного ключа приложения.
 // Реализуется *sshkey.Manager.
 type serverKeyProvider interface {
@@ -81,6 +89,7 @@ const (
 
 type ServerService struct {
 	repo             domain.ServerRepository
+	registryRepo     domain.RegistryRepository // используется методом Deploy
 	cipher           *crypto.Cipher
 	connector        serverConnector
 	keys             serverKeyProvider
@@ -89,12 +98,14 @@ type ServerService struct {
 	containersRemote remoteContainersCollector // nil допустим
 	imagesRemote     remoteImagesCollector     // nil допустим
 	servicesRemote   remoteServicesCollector   // nil допустим
+	deployer         remoteDeployer            // nil допустим
 	logger           *slog.Logger
 	clock            func() time.Time
 }
 
 func NewServerService(
 	repo domain.ServerRepository,
+	registryRepo domain.RegistryRepository,
 	cipher *crypto.Cipher,
 	connector serverConnector,
 	keys serverKeyProvider,
@@ -103,10 +114,12 @@ func NewServerService(
 	containersRemote remoteContainersCollector,
 	imagesRemote remoteImagesCollector,
 	servicesRemote remoteServicesCollector,
+	deployer remoteDeployer,
 	logger *slog.Logger,
 ) *ServerService {
 	return &ServerService{
 		repo:             repo,
+		registryRepo:     registryRepo,
 		cipher:           cipher,
 		connector:        connector,
 		keys:             keys,
@@ -115,6 +128,7 @@ func NewServerService(
 		containersRemote: containersRemote,
 		imagesRemote:     imagesRemote,
 		servicesRemote:   servicesRemote,
+		deployer:         deployer,
 		logger:           logger,
 		clock:            time.Now,
 	}
@@ -380,6 +394,165 @@ func (s *ServerService) RemoteImages(ctx context.Context, id uuid.UUID) (*Remote
 		CheckedAt: now,
 		Images:    info,
 	}, nil
+}
+
+// Deploy выкатывает указанный образ из registry на удалённый сервер. Цепочка:
+// docker login → стоп существующих контейнеров → их удаление → удаление
+// старого образа → pull нового → docker run → verify. Каждый шаг рапортует
+// статус; при критическом сбое остальные шаги получают status=not_run.
+//
+// Возвращает ошибку метода ТОЛЬКО при проблемах конфигурации/валидации
+// (нет сервера/registry в БД, невалидные параметры). Сетевые проблемы, отказ
+// auth, упавшие шаги — это 200 OK с подробностями в Output.
+func (s *ServerService) Deploy(ctx context.Context, in DeployInput) (*DeployOutput, error) {
+	if s.deployer == nil {
+		return nil, fmt.Errorf("server: deployer is not configured")
+	}
+
+	// 1) Валидация входа (id + параметры самого деплоя).
+	if in.ServerID == uuid.Nil {
+		return nil, domain.ValidationErrors{
+			&domain.ValidationError{Field: "server_id", Message: "is required"},
+		}
+	}
+	if in.RegistryID == uuid.Nil {
+		return nil, domain.ValidationErrors{
+			&domain.ValidationError{Field: "registry_id", Message: "is required"},
+		}
+	}
+
+	// 2) Загружаем registry, расшифровываем пароль.
+	reg, err := s.registryRepo.GetByID(ctx, in.RegistryID)
+	if err != nil {
+		return nil, err // domain.ErrNotFound оборачивает не-found
+	}
+	regPassword := ""
+	if reg.PasswordEncrypted != "" {
+		pw, derr := s.cipher.Decrypt(reg.PasswordEncrypted)
+		if derr != nil {
+			return nil, fmt.Errorf("deploy: decrypt registry password: %w", derr)
+		}
+		regPassword = pw
+	}
+
+	// 3) Собираем параметры деплоя и валидируем их пакетным методом.
+	params := remotedeploy.DeployParams{
+		RegistryHost:      normalizeRegistryHost(reg.URL),
+		RegistryNamespace: reg.Namespace,
+		RegistryUsername:  reg.Username,
+		RegistryPassword:  regPassword,
+		RegistryInsecure:  reg.Insecure,
+		Image:             in.Image,
+		Tag:               in.Tag,
+		ContainerName:     in.ContainerName,
+		RestartPolicy:     in.RestartPolicy,
+	}
+	for _, p := range in.Ports {
+		params.Ports = append(params.Ports, remotedeploy.PortMapping{Host: p.Host, Container: p.Container})
+	}
+	// Дефолт: если порты не переданы, используем 3000:80. Это удобно для веб-UI
+	// — самых частых деплоев. Runner всё равно требует хотя бы одного маппинга
+	// (инвариант защиты ниже сервиса), поэтому подставляем здесь, а не там.
+	if len(params.Ports) == 0 {
+		params.Ports = []remotedeploy.PortMapping{{Host: 3000, Container: 80}}
+	}
+	if verr := remotedeploy.ValidateParams(params); verr != nil {
+		return nil, domain.ValidationErrors{
+			&domain.ValidationError{Field: "params", Message: verr.Error()},
+		}
+	}
+
+	// 4) Открываем SSH-сессию к серверу.
+	client, method, failRes, err := s.openRemoteSession(ctx, in.ServerID)
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		now := s.clock()
+		s.logger.Info("server deploy", "server_id", in.ServerID, "status", failRes.Status, "connected", false)
+		return &DeployOutput{
+			ID:        in.ServerID,
+			Connected: false,
+			Status:    failRes.Status,
+			Message:   failRes.Message,
+			CheckedAt: now,
+		}, nil
+	}
+	defer client.Close()
+
+	// 5) Выполняем шаги.
+	result := s.deployer.Run(ctx, client, params)
+
+	now := s.clock()
+
+	// Записываем last_status: успешный деплой = OK, иначе ERROR (с описанием).
+	statusForDB := sshclient.StatusOK
+	errMsgForDB := ""
+	if !result.Success {
+		statusForDB = sshclient.StatusError
+		errMsgForDB = "deploy failed: " + firstFailedStep(result)
+	}
+	if uerr := s.repo.UpdateConnectionStatus(ctx, in.ServerID, statusForDB, errMsgForDB, now, nil); uerr != nil {
+		s.logger.Warn("update server connection status", "err", uerr, "server_id", in.ServerID)
+	}
+
+	s.logger.Info("server deploy",
+		"server_id", in.ServerID,
+		"registry_id", in.RegistryID,
+		"image_ref", result.ImageRef,
+		"container_name", result.ContainerName,
+		"success", result.Success,
+		"duration_ms", result.DurationMS,
+	)
+
+	msg := "deploy succeeded: " + result.ImageRef
+	if !result.Success {
+		msg = "deploy failed: " + firstFailedStep(result)
+	}
+	return &DeployOutput{
+		ID:        in.ServerID,
+		Connected: true,
+		Method:    method,
+		Status:    statusForDB,
+		Message:   msg,
+		CheckedAt: now,
+		Result:    result,
+	}, nil
+}
+
+// normalizeRegistryHost вырезает схему (http/https) и trailing slash из URL
+// записи registry. Это нужно, потому что в БД URL может быть как
+// "https://registry-1.docker.io", так и просто "docker.io" — оба варианта
+// валидны, но docker CLI ожидает host без схемы.
+func normalizeRegistryHost(url string) string {
+	url = strings.TrimSpace(url)
+	url = strings.TrimPrefix(url, "https://")
+	url = strings.TrimPrefix(url, "http://")
+	url = strings.TrimSuffix(url, "/")
+	if url == "" {
+		return "docker.io"
+	}
+	// Если в URL внезапно есть путь — отрезаем (registry-логин принимает только host[:port]).
+	if i := strings.Index(url, "/"); i >= 0 {
+		url = url[:i]
+	}
+	return url
+}
+
+// firstFailedStep — короткое описание первого упавшего шага для UI/логов.
+func firstFailedStep(r *remotedeploy.DeployResult) string {
+	if r == nil {
+		return "unknown error"
+	}
+	for _, s := range r.Steps {
+		if s.Status == remotedeploy.StatusFailed {
+			return s.Name + ": " + s.Message
+		}
+	}
+	if !r.Available {
+		return r.Reason
+	}
+	return "unknown error"
 }
 
 // RemoteServices возвращает список systemd-сервисов с удалённого сервера через

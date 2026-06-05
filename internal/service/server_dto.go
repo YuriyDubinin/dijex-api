@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/YuriyDubinin/dijex-api/internal/docker"
+	"github.com/YuriyDubinin/dijex-api/internal/remotedeploy"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
 	"github.com/YuriyDubinin/dijex-api/internal/systemd"
 )
@@ -144,6 +145,39 @@ type RemotePingOutput struct {
 	Message   string
 	IsActive  bool
 	CheckedAt time.Time
+}
+
+// ───────────────────────── Deploy ─────────────────────────
+
+// DeployInput — входные данные для деплоя образа на удалённый сервер.
+// ServerID + RegistryID указывают, КУДА деплоить и ОТКУДА брать образ;
+// остальные поля описывают сам образ и параметры запуска контейнера.
+type DeployInput struct {
+	ServerID      uuid.UUID
+	RegistryID    uuid.UUID
+	Image         string
+	Tag           string
+	ContainerName string
+	Ports         []DeployPort
+	RestartPolicy string
+}
+
+type DeployPort struct {
+	Host      int
+	Container int
+}
+
+// DeployOutput — итог деплоя. По стандартному шаблону: id сервера + connected +
+// status + message. Сам отчёт по шагам лежит в Result (если SSH удался).
+type DeployOutput struct {
+	ID        uuid.UUID
+	Connected bool
+	Method    string
+	Status    string
+	Message   string
+	CheckedAt time.Time
+
+	Result *remotedeploy.DeployResult // присутствует при Connected=true
 }
 
 // RemoteImagesOutput — оболочка над списком Docker-образов удалённого сервера.

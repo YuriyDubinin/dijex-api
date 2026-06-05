@@ -30,6 +30,7 @@ type ServerService interface {
 	RemoteContainers(ctx context.Context, id uuid.UUID) (*service.RemoteContainersOutput, error)
 	RemoteImages(ctx context.Context, id uuid.UUID) (*service.RemoteImagesOutput, error)
 	RemoteServices(ctx context.Context, id uuid.UUID) (*service.RemoteServicesOutput, error)
+	Deploy(ctx context.Context, in service.DeployInput) (*service.DeployOutput, error)
 }
 
 type ServerHandler struct {
@@ -246,6 +247,44 @@ func (h *ServerHandler) RemoteSystemServices(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	response.WriteJSON(w, http.StatusOK, dto.FromRemoteServicesOutput(out))
+}
+
+// Deploy — POST /api/servers/remote/deploy.
+// Цепочка: стоп существующих контейнеров → их удаление → удаление старого
+// образа → pull → docker run → verify. Сетевые/auth-сбои — 200 с connected=false.
+// Невалидный body / параметры — 400/422.
+func (h *ServerHandler) Deploy(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+
+	var req dto.DeployHTTPRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "INVALID_JSON", "invalid JSON body")
+		return
+	}
+	if err := h.validator.Struct(req); err != nil {
+		details := toResponseFieldErrors(validator.TranslateErrors(err))
+		response.WriteError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "request validation failed", details...)
+		return
+	}
+
+	out, err := h.service.Deploy(r.Context(), req.ToServiceInput())
+	if err != nil {
+		var verr domain.ValidationErrors
+		if errors.As(err, &verr) {
+			response.WriteError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "deploy validation failed", domainValidationDetails(verr)...)
+			return
+		}
+		if errors.Is(err, domain.ErrNotFound) {
+			response.WriteError(w, http.StatusNotFound, "NOT_FOUND", "server or registry not found")
+			return
+		}
+		h.logger.Error("deploy", "err", err, "request_id", mw.RequestIDFromContext(r.Context()))
+		response.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error")
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, dto.FromDeployOutput(out))
 }
 
 // InstallKey — POST /api/servers/remote/install-ssh.

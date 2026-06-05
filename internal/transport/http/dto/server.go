@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/YuriyDubinin/dijex-api/internal/docker"
+	"github.com/YuriyDubinin/dijex-api/internal/remotedeploy"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
 	"github.com/YuriyDubinin/dijex-api/internal/service"
 	"github.com/YuriyDubinin/dijex-api/internal/systemd"
@@ -275,6 +276,70 @@ func FromRemoteServicesOutput(o *service.RemoteServicesOutput) RemoteServicesHTT
 		Message:   o.Message,
 		CheckedAt: o.CheckedAt,
 		Services:  o.Services,
+	}
+}
+
+// ───────────────────────── Deploy ─────────────────────────
+
+// DeployHTTPRequest — тело запроса POST /api/servers/remote/deploy.
+//
+// Все строковые поля имеют ограничение длины и проходят дополнительную
+// проверку на безопасные символы внутри пакета remotedeploy (см. ValidateParams).
+// Валидация в этом DTO — первая линия (struct-tags), вторая — внутри сервиса.
+type DeployHTTPRequest struct {
+	ServerID      uuid.UUID         `json:"server_id"      validate:"required"`
+	RegistryID    uuid.UUID         `json:"registry_id"    validate:"required"`
+	Image         string            `json:"image"          validate:"required,min=1,max=255"`
+	Tag           string            `json:"tag"            validate:"required,min=1,max=128"`
+	ContainerName string            `json:"container_name" validate:"required,min=1,max=255"`
+	// Ports — опционально. Если массив пуст/не передан — сервис подставит
+	// дефолт {host:3000, container:80}. Передавать пустой [] = «оставь дефолт».
+	Ports         []DeployPortHTTP  `json:"ports"          validate:"omitempty,max=20,dive"`
+	RestartPolicy string            `json:"restart_policy" validate:"omitempty,oneof=no on-failure always unless-stopped"`
+}
+
+type DeployPortHTTP struct {
+	Host      int `json:"host"      validate:"required,min=1,max=65535"`
+	Container int `json:"container" validate:"required,min=1,max=65535"`
+}
+
+func (r DeployHTTPRequest) ToServiceInput() service.DeployInput {
+	in := service.DeployInput{
+		ServerID:      r.ServerID,
+		RegistryID:    r.RegistryID,
+		Image:         r.Image,
+		Tag:           r.Tag,
+		ContainerName: r.ContainerName,
+		RestartPolicy: r.RestartPolicy,
+	}
+	for _, p := range r.Ports {
+		in.Ports = append(in.Ports, service.DeployPort{Host: p.Host, Container: p.Container})
+	}
+	return in
+}
+
+// DeployHTTPResponse — стандартная «удалённая» обёртка + детали деплоя.
+// Поле `result` имеет тот же тип, что отдаёт сам пакет remotedeploy, — фронт
+// может сразу строить пошаговый прогресс из `result.steps`.
+type DeployHTTPResponse struct {
+	ID        uuid.UUID                  `json:"id"`
+	Connected bool                       `json:"connected"`
+	Method    string                     `json:"method,omitempty"`
+	Status    string                     `json:"status"`
+	Message   string                     `json:"message"`
+	CheckedAt time.Time                  `json:"checked_at"`
+	Result    *remotedeploy.DeployResult `json:"result,omitempty"`
+}
+
+func FromDeployOutput(o *service.DeployOutput) DeployHTTPResponse {
+	return DeployHTTPResponse{
+		ID:        o.ID,
+		Connected: o.Connected,
+		Method:    o.Method,
+		Status:    o.Status,
+		Message:   o.Message,
+		CheckedAt: o.CheckedAt,
+		Result:    o.Result,
 	}
 }
 

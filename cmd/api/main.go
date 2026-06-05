@@ -13,6 +13,7 @@ import (
 	"github.com/YuriyDubinin/dijex-api/internal/geo"
 	"github.com/YuriyDubinin/dijex-api/internal/notifier/telegram"
 	"github.com/YuriyDubinin/dijex-api/internal/registryclient"
+	"github.com/YuriyDubinin/dijex-api/internal/remotedeploy"
 	"github.com/YuriyDubinin/dijex-api/internal/remotedocker"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
 	"github.com/YuriyDubinin/dijex-api/internal/remotesystemd"
@@ -111,13 +112,15 @@ func main() {
 	remoteSystemCollector := remoteinfo.NewCollector(geoResolver)
 	remoteContainersCollector := remotedocker.NewCollector()
 	remoteServicesCollector := remotesystemd.NewCollector()
+	remoteDeployRunner := remotedeploy.NewRunner()
 
 	// Тот же шифр используем для секретов серверов (один app-ключ на все секреты).
 	// Коллектор для удалённых образов — это тот же *remotedocker.Collector
 	// (у него уже есть метод CollectImages).
 	serverService := service.NewServerService(
-		serverRepo, registryCipher, sshConnector, sshManager, geoResolver,
+		serverRepo, registryRepo, registryCipher, sshConnector, sshManager, geoResolver,
 		remoteSystemCollector, remoteContainersCollector, remoteContainersCollector, remoteServicesCollector,
+		remoteDeployRunner,
 		log,
 	)
 
