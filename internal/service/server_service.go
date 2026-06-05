@@ -432,7 +432,13 @@ func (s *ServerService) Deploy(ctx context.Context, in DeployInput) (*DeployOutp
 		if derr != nil {
 			return nil, fmt.Errorf("deploy: decrypt registry password: %w", derr)
 		}
-		regPassword = pw
+		// Защита от паролей, сохранённых с trailing whitespace/CRLF (типично
+		// при copy-paste из терминала). docker login --password-stdin обрезает
+		// только ОДИН trailing \n; двойной \n или \r оставляет остаток, который
+		// уходит в base64 → в Authorization header → даёт «malformed HTTP
+		// Authorization header» от docker registry. Тримим тут (первая линия;
+		// есть ещё вторая на уровне самого remotedeploy.stepLogin).
+		regPassword = strings.TrimRight(pw, "\r\n\t ")
 	}
 
 	// 3) Собираем параметры деплоя и валидируем их пакетным методом.

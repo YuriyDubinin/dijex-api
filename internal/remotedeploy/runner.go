@@ -96,19 +96,58 @@ func (r *Runner) stepLogin(ctx context.Context, client *ssh.Client, p DeployPara
 	t := time.Now()
 	defer func() { step.DurationMS = time.Since(t).Milliseconds() }()
 
-	if p.RegistryUsername == "" || p.RegistryPassword == "" {
+	// Защита defence-in-depth (первый trim делает сервис). Здесь повторяем,
+	// чтобы инвариант «пароль уходит в stdin без trailing CRLF/whitespace»
+	// держался независимо от того, кто вызывает Runner.
+	password := sanitizeRegistryPassword(p.RegistryPassword)
+
+	if p.RegistryUsername == "" || password == "" {
 		step.Status = StatusSkipped
 		step.Message = "no credentials in registry record — assuming public access"
 		return true
 	}
 
-	// docker login <host> -u <user> --password-stdin
+	// Если внутри пароля остался \r или \n ПОСЛЕ trim'а — это однозначно
+	// битый ввод (пароль с переносом строки в середине). docker login такой
+	// пароль обработает, но registry вернёт «malformed Authorization header».
+	// Лучше остановиться сразу с понятной диагностикой.
+	if containsControlChar(password) {
+		step.Status = StatusFailed
+		step.Message = "registry password contains control characters (CR/LF/tab) — re-save the registry credentials"
+		return false
+	}
+
 	host := p.RegistryHost
 	if host == "" {
 		host = "docker.io"
 	}
-	cmd := fmt.Sprintf("docker login %s -u %s --password-stdin", shellQuote(host), shellQuote(p.RegistryUsername))
-	_, stderr, err := runSSHWithStdin(ctx, client, cmd, p.RegistryPassword)
+
+	// DockerHub case-sensitive по username при `docker login --password-stdin`
+	// с обычным паролем: вход с "YuriyDubinin100" получает `malformed HTTP
+	// Authorization header`, вход с "yuriydubinin100" — Login Succeeded. На
+	// стороне DockerHub username всегда хранится в lowercase, поэтому
+	// принудительный lower-case безопасен и идемпотентен. Для других registry
+	// case может быть значим (например, в самописных Harbor), поэтому
+	// нормализуем username ТОЛЬКО для DockerHub-хостов.
+	username := p.RegistryUsername
+	if isDockerHubHost(host) {
+		username = strings.ToLower(username)
+	}
+
+	// ВАЖНО для DockerHub: команда `docker login` с явно указанным V2-registry-
+	// хостом (registry-1.docker.io) идёт по неправильному code-path и получает
+	// ответ «malformed HTTP Authorization header» от registry. Правильный путь
+	// — НЕ указывать host: тогда CLI логинит в дефолтный index.docker.io/v1/
+	// (legacy login endpoint). Image-pull/push по-прежнему может ходить на
+	// registry-1.docker.io/... — docker CLI сам мапит credentials между этими
+	// двумя именами в одной DockerHub-зоне. См. issue moby/moby#10866.
+	var cmd string
+	if isDockerHubHost(host) {
+		cmd = fmt.Sprintf("docker login -u %s --password-stdin", shellQuote(username))
+	} else {
+		cmd = fmt.Sprintf("docker login %s -u %s --password-stdin", shellQuote(host), shellQuote(username))
+	}
+	_, stderr, err := runSSHWithStdin(ctx, client, cmd, password)
 	if err != nil {
 		step.Status = StatusFailed
 		step.Message = "docker login failed: " + firstNonEmpty(stderr, err.Error())
@@ -117,6 +156,35 @@ func (r *Runner) stepLogin(ctx context.Context, client *ssh.Client, p DeployPara
 	step.Status = StatusOK
 	step.Message = "logged in to " + host
 	return true
+}
+
+// isDockerHubHost распознаёт алиасы DockerHub. Login на этих хостах надо
+// делать БЕЗ явного указания host (см. комментарий в stepLogin).
+// Список замкнутый: только реально используемые DockerHub-имена.
+func isDockerHubHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "",
+		"docker.io",
+		"index.docker.io",
+		"registry-1.docker.io",
+		"registry.hub.docker.com":
+		return true
+	}
+	return false
+}
+
+// sanitizeRegistryPassword обрезает trailing whitespace и CRLF у пароля.
+// Это критично для `docker login --password-stdin`: оно само обрезает только
+// ОДИН trailing \n, остаток уходит в Authorization header и ломает запрос.
+func sanitizeRegistryPassword(pw string) string {
+	return strings.TrimRight(pw, "\r\n\t ")
+}
+
+// containsControlChar возвращает true, если строка содержит \r, \n или \t
+// в любой позиции. Используется как поздняя страховка: после sanitize любые
+// такие символы означают «они внутри пароля», что почти всегда — битый ввод.
+func containsControlChar(s string) bool {
+	return strings.ContainsAny(s, "\r\n\t")
 }
 
 // stepFindAndStop: находит контейнеры по имени и по образу, останавливает их.

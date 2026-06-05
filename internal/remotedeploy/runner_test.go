@@ -107,6 +107,75 @@ func TestBuildDockerRunCommand_MultiplePorts(t *testing.T) {
 	}
 }
 
+func TestIsDockerHubHost(t *testing.T) {
+	cases := map[string]bool{
+		// DockerHub-алиасы (login должен идти без host'а):
+		"":                       true,
+		"docker.io":               true,
+		"index.docker.io":         true,
+		"registry-1.docker.io":    true,
+		"registry.hub.docker.com": true,
+		// С пробелами/регистром — тоже должны распознаваться:
+		" docker.io ":            true,
+		"REGISTRY-1.DOCKER.IO":   true,
+		// Приватные/сторонние — login идёт с host'ом:
+		"ghcr.io":                       false,
+		"registry.gitlab.com":           false,
+		"harbor.example.com":            false,
+		"example.com:5000":              false,
+		"123456789.dkr.ecr.us-east-1.amazonaws.com": false,
+	}
+	for in, want := range cases {
+		if got := isDockerHubHost(in); got != want {
+			t.Errorf("isDockerHubHost(%q)=%v, want %v", in, got, want)
+		}
+	}
+}
+
+func TestSanitizeRegistryPassword(t *testing.T) {
+	cases := map[string]string{
+		// Без изменений — чистый пароль:
+		"dckr_pat_xyz":  "dckr_pat_xyz",
+		"normalP@ssw0rd": "normalP@ssw0rd",
+		// Trailing CRLF (классический случай copy-paste из терминала):
+		"dckr_pat_xyz\n":     "dckr_pat_xyz",
+		"dckr_pat_xyz\r\n":   "dckr_pat_xyz",
+		"dckr_pat_xyz\n\n":   "dckr_pat_xyz",
+		"dckr_pat_xyz\r":     "dckr_pat_xyz",
+		"dckr_pat_xyz\t":     "dckr_pat_xyz",
+		"dckr_pat_xyz  ":     "dckr_pat_xyz",
+		"dckr_pat_xyz \n\r": "dckr_pat_xyz",
+		// Пустые после trim — должны стать пустыми:
+		"":        "",
+		"\n":      "",
+		"\r\n":    "",
+		"   ":     "",
+	}
+	for in, want := range cases {
+		if got := sanitizeRegistryPassword(in); got != want {
+			t.Errorf("sanitizeRegistryPassword(%q)=%q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestContainsControlChar(t *testing.T) {
+	cases := map[string]bool{
+		"dckr_pat_xyz":         false,
+		"P@ssw0rd!":            false,
+		"":                     false,
+		"pass\nword":           true, // newline в середине
+		"pass\rword":           true, // CR в середине
+		"pass\tword":           true, // tab в середине
+		"\n":                   true, // только control
+		"a\rb\nc\td":           true,
+	}
+	for in, want := range cases {
+		if got := containsControlChar(in); got != want {
+			t.Errorf("containsControlChar(%q)=%v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestShellQuote(t *testing.T) {
 	cases := map[string]string{
 		"hello":         "'hello'",
