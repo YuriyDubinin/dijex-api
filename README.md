@@ -94,6 +94,7 @@ docker pull yuriydubinin100/dijex-api:1.0.0
 | `POST` | `/api/servers/remote/deploy` | Деплой образа из подключённого registry на удалённый сервер: `docker login` → стоп существующих контейнеров → их удаление → удаление старого образа → `docker pull` → `docker run -d ...` → проверка работоспособности. Возвращает пошаговый отчёт (`steps[]`). |
 | `POST` | `/api/servers/remote/system/main` | Подробный снимок удалённого сервера через SSH: host, cpu, memory, disks, network, docker. JSON-контракт идентичен `/api/system/main`, фронт может рендерить теми же компонентами. |
 | `POST` | `/api/servers/remote/system/containers/list` | Список Docker-контейнеров удалённого сервера через SSH (`docker version` + `info` + `inspect --size`). JSON-контракт идентичен `/api/system/containers`. |
+| `POST` | `/api/servers/remote/system/containers/logs` | Логи указанного контейнера на удалённом сервере через SSH (`docker logs`). Поддерживает `tail`, `since`, `until`, `timestamps`, отдельные stdout/stderr. Кольцевой буфер 10 МБ на поток (хвост сохраняется). |
 | `POST` | `/api/servers/remote/system/images/list` | Список Docker-образов удалённого сервера через SSH (`docker image inspect $(docker image ls -q)` + `docker ps` для счётчика). JSON-контракт идентичен `/api/system/images`. |
 | `POST` | `/api/servers/remote/system/services/list` | Список systemd-сервисов удалённого сервера через SSH (`systemctl list-units` + `show`). JSON-контракт идентичен `/api/system/services`. |
 

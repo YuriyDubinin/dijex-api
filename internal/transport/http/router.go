@@ -98,6 +98,7 @@ func NewRouter(deps Deps) http.Handler {
 			r.Post("/servers/remote/deploy", deps.ServerHandler.Deploy)
 			r.Post("/servers/remote/system/main", deps.ServerHandler.RemoteSystemMain)
 			r.Post("/servers/remote/system/containers/list", deps.ServerHandler.RemoteSystemContainers)
+			r.Post("/servers/remote/system/containers/logs", deps.ServerHandler.RemoteContainerLogs)
 			r.Post("/servers/remote/system/images/list", deps.ServerHandler.RemoteSystemImages)
 			r.Post("/servers/remote/system/services/list", deps.ServerHandler.RemoteSystemServices)
 

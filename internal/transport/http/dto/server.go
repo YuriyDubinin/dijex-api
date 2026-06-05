@@ -8,6 +8,7 @@ import (
 	"github.com/YuriyDubinin/dijex-api/internal/docker"
 	"github.com/YuriyDubinin/dijex-api/internal/remotedeploy"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
+	"github.com/YuriyDubinin/dijex-api/internal/remotelogs"
 	"github.com/YuriyDubinin/dijex-api/internal/service"
 	"github.com/YuriyDubinin/dijex-api/internal/systemd"
 )
@@ -276,6 +277,60 @@ func FromRemoteServicesOutput(o *service.RemoteServicesOutput) RemoteServicesHTT
 		Message:   o.Message,
 		CheckedAt: o.CheckedAt,
 		Services:  o.Services,
+	}
+}
+
+// ───────────────────────── Container logs ─────────────────────────
+
+// RemoteLogsHTTPRequest — тело POST /api/servers/remote/system/containers/logs.
+// `container` — имя или id контейнера; формат и длина проверяются validator-ом,
+// дополнительно — строгим regexp в remotelogs.ValidateParams.
+type RemoteLogsHTTPRequest struct {
+	ServerID      uuid.UUID `json:"server_id"      validate:"required"`
+	Container     string    `json:"container"      validate:"required,min=1,max=255"`
+	Tail          int       `json:"tail"           validate:"omitempty,min=-1,max=1000000"`
+	Since         string    `json:"since"          validate:"omitempty,max=64"`
+	Until         string    `json:"until"          validate:"omitempty,max=64"`
+	Timestamps    bool      `json:"timestamps"`
+	IncludeStderr *bool     `json:"include_stderr"` // указатель: nil → дефолт true
+}
+
+func (r RemoteLogsHTTPRequest) ToServiceInput() service.RemoteLogsInput {
+	in := service.RemoteLogsInput{
+		ServerID:      r.ServerID,
+		Container:     r.Container,
+		Tail:          r.Tail,
+		Since:         r.Since,
+		Until:         r.Until,
+		Timestamps:    r.Timestamps,
+		IncludeStderr: true, // дефолт
+	}
+	if r.IncludeStderr != nil {
+		in.IncludeStderr = *r.IncludeStderr
+	}
+	return in
+}
+
+// RemoteLogsHTTPResponse — стандартная «удалённая» обёртка + сами логи.
+type RemoteLogsHTTPResponse struct {
+	ID        uuid.UUID         `json:"id"`
+	Connected bool              `json:"connected"`
+	Method    string            `json:"method,omitempty"`
+	Status    string            `json:"status"`
+	Message   string            `json:"message"`
+	CheckedAt time.Time         `json:"checked_at"`
+	Logs      *remotelogs.Result `json:"logs,omitempty"`
+}
+
+func FromRemoteLogsOutput(o *service.RemoteLogsOutput) RemoteLogsHTTPResponse {
+	return RemoteLogsHTTPResponse{
+		ID:        o.ID,
+		Connected: o.Connected,
+		Method:    o.Method,
+		Status:    o.Status,
+		Message:   o.Message,
+		CheckedAt: o.CheckedAt,
+		Logs:      o.Logs,
 	}
 }
 

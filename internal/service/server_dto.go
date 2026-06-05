@@ -8,6 +8,7 @@ import (
 	"github.com/YuriyDubinin/dijex-api/internal/docker"
 	"github.com/YuriyDubinin/dijex-api/internal/remotedeploy"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
+	"github.com/YuriyDubinin/dijex-api/internal/remotelogs"
 	"github.com/YuriyDubinin/dijex-api/internal/systemd"
 )
 
@@ -178,6 +179,32 @@ type DeployOutput struct {
 	CheckedAt time.Time
 
 	Result *remotedeploy.DeployResult // присутствует при Connected=true
+}
+
+// ───────────────────────── Container logs ─────────────────────────
+
+// RemoteLogsInput — параметры запроса логов контейнера.
+type RemoteLogsInput struct {
+	ServerID      uuid.UUID
+	Container     string
+	Tail          int
+	Since         string
+	Until         string
+	Timestamps    bool
+	IncludeStderr bool
+}
+
+// RemoteLogsOutput — оболочка над логами контейнера. Logs nil-able: если
+// SSH не получилось — отдаём connected=false + причину.
+type RemoteLogsOutput struct {
+	ID        uuid.UUID
+	Connected bool
+	Method    string
+	Status    string
+	Message   string
+	CheckedAt time.Time
+
+	Logs *remotelogs.Result // только при Connected=true
 }
 
 // RemoteImagesOutput — оболочка над списком Docker-образов удалённого сервера.

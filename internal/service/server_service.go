@@ -17,6 +17,7 @@ import (
 	"github.com/YuriyDubinin/dijex-api/internal/geo"
 	"github.com/YuriyDubinin/dijex-api/internal/remotedeploy"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
+	"github.com/YuriyDubinin/dijex-api/internal/remotelogs"
 	"github.com/YuriyDubinin/dijex-api/internal/sshclient"
 	"github.com/YuriyDubinin/dijex-api/internal/sshkey"
 	"github.com/YuriyDubinin/dijex-api/internal/systemd"
@@ -60,6 +61,13 @@ type remoteServicesCollector interface {
 	Collect(ctx context.Context, client *ssh.Client) *systemd.ServicesInfo
 }
 
+// remoteLogsCollector — контракт чтения логов контейнера на удалённом сервере.
+// Реализуется *remotelogs.Collector. nil допустим (тогда метод RemoteLogs вернёт
+// ошибку конфигурации).
+type remoteLogsCollector interface {
+	Collect(ctx context.Context, client *ssh.Client, p remotelogs.Params) *remotelogs.Result
+}
+
 // remoteDeployer — контракт выполнения деплоя на удалённый сервер.
 // Реализуется *remotedeploy.Runner. nil допустим — тогда метод Deploy вернёт
 // ошибку конфигурации.
@@ -99,6 +107,7 @@ type ServerService struct {
 	imagesRemote     remoteImagesCollector     // nil допустим
 	servicesRemote   remoteServicesCollector   // nil допустим
 	deployer         remoteDeployer            // nil допустим
+	logsRemote       remoteLogsCollector       // nil допустим
 	logger           *slog.Logger
 	clock            func() time.Time
 }
@@ -115,6 +124,7 @@ func NewServerService(
 	imagesRemote remoteImagesCollector,
 	servicesRemote remoteServicesCollector,
 	deployer remoteDeployer,
+	logsRemote remoteLogsCollector,
 	logger *slog.Logger,
 ) *ServerService {
 	return &ServerService{
@@ -129,6 +139,7 @@ func NewServerService(
 		imagesRemote:     imagesRemote,
 		servicesRemote:   servicesRemote,
 		deployer:         deployer,
+		logsRemote:       logsRemote,
 		logger:           logger,
 		clock:            time.Now,
 	}
@@ -393,6 +404,78 @@ func (s *ServerService) RemoteImages(ctx context.Context, id uuid.UUID) (*Remote
 		Message:   "images collected via " + method,
 		CheckedAt: now,
 		Images:    info,
+	}, nil
+}
+
+// RemoteLogs возвращает логи указанного Docker-контейнера с удалённого сервера
+// через SSH + CLI `docker logs`. is_active не трогаем — метод диагностический.
+//
+// Поведение: невалидный input → 422. SSH-сбой → 200 с connected=false (нет logs).
+// Docker недоступен / контейнер не найден → 200 с logs.available=false и причиной.
+func (s *ServerService) RemoteLogs(ctx context.Context, in RemoteLogsInput) (*RemoteLogsOutput, error) {
+	if s.logsRemote == nil {
+		return nil, fmt.Errorf("server: remote logs collector is not configured")
+	}
+
+	// 1) Валидация на стороне сервиса (защита поверх HTTP-валидатора).
+	if in.ServerID == uuid.Nil {
+		return nil, domain.ValidationErrors{
+			&domain.ValidationError{Field: "server_id", Message: "is required"},
+		}
+	}
+	params := remotelogs.Params{
+		Container:     in.Container,
+		Tail:          in.Tail,
+		Since:         in.Since,
+		Until:         in.Until,
+		Timestamps:    in.Timestamps,
+		IncludeStderr: in.IncludeStderr,
+	}
+	if verr := remotelogs.ValidateParams(params); verr != nil {
+		return nil, domain.ValidationErrors{
+			&domain.ValidationError{Field: "params", Message: verr.Error()},
+		}
+	}
+
+	// 2) Открываем SSH (общий хелпер сервиса, такой же как в /system/main).
+	client, method, failRes, err := s.openRemoteSession(ctx, in.ServerID)
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		now := s.clock()
+		s.logger.Info("server remote logs", "server_id", in.ServerID, "status", failRes.Status, "connected", false)
+		return &RemoteLogsOutput{
+			ID: in.ServerID, Connected: false, Status: failRes.Status, Message: failRes.Message, CheckedAt: now,
+		}, nil
+	}
+	defer client.Close()
+
+	// 3) Сбор логов.
+	logs := s.logsRemote.Collect(ctx, client, params)
+
+	now := s.clock()
+	if uerr := s.repo.UpdateConnectionStatus(ctx, in.ServerID, sshclient.StatusOK, "", now, nil); uerr != nil {
+		s.logger.Warn("update server connection status", "err", uerr, "server_id", in.ServerID)
+	}
+	s.logger.Info("server remote logs",
+		"server_id", in.ServerID, "container", in.Container, "method", method,
+		"available", logs.Available, "bytes_stdout", logs.BytesStdout, "bytes_stderr", logs.BytesStderr,
+		"truncated_stdout", logs.TruncatedStdout, "truncated_stderr", logs.TruncatedStderr,
+	)
+
+	msg := "logs collected via " + method
+	if !logs.Available {
+		msg = "logs unavailable: " + logs.Reason
+	}
+	return &RemoteLogsOutput{
+		ID:        in.ServerID,
+		Connected: true,
+		Method:    method,
+		Status:    sshclient.StatusOK,
+		Message:   msg,
+		CheckedAt: now,
+		Logs:      logs,
 	}, nil
 }
 
