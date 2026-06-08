@@ -9,6 +9,7 @@ import (
 	"github.com/YuriyDubinin/dijex-api/internal/remotedeploy"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
 	"github.com/YuriyDubinin/dijex-api/internal/remotelogs"
+	"github.com/YuriyDubinin/dijex-api/internal/remotepurge"
 	"github.com/YuriyDubinin/dijex-api/internal/systemd"
 )
 
@@ -179,6 +180,31 @@ type DeployOutput struct {
 	CheckedAt time.Time
 
 	Result *remotedeploy.DeployResult // присутствует при Connected=true
+}
+
+// ───────────────────────── Purge image ─────────────────────────
+
+// PurgeImageInput — параметры зачистки образа на удалённом сервере.
+// Симметрично DeployInput: registry_id + image + tag для построения image_ref,
+// плюс опциональное container_name (если нужно ловить контейнер по имени).
+type PurgeImageInput struct {
+	ServerID      uuid.UUID
+	RegistryID    uuid.UUID
+	Image         string
+	Tag           string
+	ContainerName string // опционально
+}
+
+// PurgeImageOutput — итог. Структурно идентичен DeployOutput.
+type PurgeImageOutput struct {
+	ID        uuid.UUID
+	Connected bool
+	Method    string
+	Status    string
+	Message   string
+	CheckedAt time.Time
+
+	Result *remotepurge.PurgeResult // присутствует при Connected=true
 }
 
 // ───────────────────────── Container logs ─────────────────────────

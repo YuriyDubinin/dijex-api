@@ -31,6 +31,7 @@ type ServerService interface {
 	RemoteImages(ctx context.Context, id uuid.UUID) (*service.RemoteImagesOutput, error)
 	RemoteServices(ctx context.Context, id uuid.UUID) (*service.RemoteServicesOutput, error)
 	Deploy(ctx context.Context, in service.DeployInput) (*service.DeployOutput, error)
+	PurgeImage(ctx context.Context, in service.PurgeImageInput) (*service.PurgeImageOutput, error)
 	RemoteLogs(ctx context.Context, in service.RemoteLogsInput) (*service.RemoteLogsOutput, error)
 }
 
@@ -248,6 +249,43 @@ func (h *ServerHandler) RemoteSystemServices(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	response.WriteJSON(w, http.StatusOK, dto.FromRemoteServicesOutput(out))
+}
+
+// PurgeImage — POST /api/servers/remote/images/purge.
+// Симметрия к Deploy: чистит ВСЕ контейнеры использующие image:tag и удаляет
+// сам образ. Сетевые/auth-сбои — 200 с connected=false. Невалидный body — 400/422.
+func (h *ServerHandler) PurgeImage(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+
+	var req dto.PurgeImageHTTPRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		response.WriteError(w, http.StatusBadRequest, "INVALID_JSON", "invalid JSON body")
+		return
+	}
+	if err := h.validator.Struct(req); err != nil {
+		details := toResponseFieldErrors(validator.TranslateErrors(err))
+		response.WriteError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "request validation failed", details...)
+		return
+	}
+
+	out, err := h.service.PurgeImage(r.Context(), req.ToServiceInput())
+	if err != nil {
+		var verr domain.ValidationErrors
+		if errors.As(err, &verr) {
+			response.WriteError(w, http.StatusUnprocessableEntity, "VALIDATION_ERROR", "purge validation failed", domainValidationDetails(verr)...)
+			return
+		}
+		if errors.Is(err, domain.ErrNotFound) {
+			response.WriteError(w, http.StatusNotFound, "NOT_FOUND", "server or registry not found")
+			return
+		}
+		h.logger.Error("purge image", "err", err, "request_id", mw.RequestIDFromContext(r.Context()))
+		response.WriteError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "internal server error")
+		return
+	}
+	response.WriteJSON(w, http.StatusOK, dto.FromPurgeImageOutput(out))
 }
 
 // RemoteContainerLogs — POST /api/servers/remote/system/containers/logs.

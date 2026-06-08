@@ -9,6 +9,7 @@ import (
 	"github.com/YuriyDubinin/dijex-api/internal/remotedeploy"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
 	"github.com/YuriyDubinin/dijex-api/internal/remotelogs"
+	"github.com/YuriyDubinin/dijex-api/internal/remotepurge"
 	"github.com/YuriyDubinin/dijex-api/internal/service"
 	"github.com/YuriyDubinin/dijex-api/internal/systemd"
 )
@@ -331,6 +332,54 @@ func FromRemoteLogsOutput(o *service.RemoteLogsOutput) RemoteLogsHTTPResponse {
 		Message:   o.Message,
 		CheckedAt: o.CheckedAt,
 		Logs:      o.Logs,
+	}
+}
+
+// ───────────────────────── Purge image ─────────────────────────
+
+// PurgeImageHTTPRequest — тело POST /api/servers/remote/images/purge.
+// Симметрично DeployHTTPRequest, но без полей запуска (ports / restart_policy):
+// purge только удаляет.
+type PurgeImageHTTPRequest struct {
+	ServerID      uuid.UUID `json:"server_id"      validate:"required"`
+	RegistryID    uuid.UUID `json:"registry_id"    validate:"required"`
+	Image         string    `json:"image"          validate:"required,min=1,max=255"`
+	Tag           string    `json:"tag"            validate:"required,min=1,max=128"`
+	ContainerName string    `json:"container_name" validate:"omitempty,min=1,max=255"`
+}
+
+func (r PurgeImageHTTPRequest) ToServiceInput() service.PurgeImageInput {
+	return service.PurgeImageInput{
+		ServerID:      r.ServerID,
+		RegistryID:    r.RegistryID,
+		Image:         r.Image,
+		Tag:           r.Tag,
+		ContainerName: r.ContainerName,
+	}
+}
+
+// PurgeImageHTTPResponse — стандартная «удалённая» обёртка + детали purge.
+// Поле `result` имеет тип *remotepurge.PurgeResult: фронт может строить тот же
+// пошаговый прогресс, что и для deploy, — структуры шагов идентичны.
+type PurgeImageHTTPResponse struct {
+	ID        uuid.UUID                `json:"id"`
+	Connected bool                     `json:"connected"`
+	Method    string                   `json:"method,omitempty"`
+	Status    string                   `json:"status"`
+	Message   string                   `json:"message"`
+	CheckedAt time.Time                `json:"checked_at"`
+	Result    *remotepurge.PurgeResult `json:"result,omitempty"`
+}
+
+func FromPurgeImageOutput(o *service.PurgeImageOutput) PurgeImageHTTPResponse {
+	return PurgeImageHTTPResponse{
+		ID:        o.ID,
+		Connected: o.Connected,
+		Method:    o.Method,
+		Status:    o.Status,
+		Message:   o.Message,
+		CheckedAt: o.CheckedAt,
+		Result:    o.Result,
 	}
 }
 

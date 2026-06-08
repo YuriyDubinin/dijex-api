@@ -17,6 +17,7 @@ import (
 	"github.com/YuriyDubinin/dijex-api/internal/remotedocker"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
 	"github.com/YuriyDubinin/dijex-api/internal/remotelogs"
+	"github.com/YuriyDubinin/dijex-api/internal/remotepurge"
 	"github.com/YuriyDubinin/dijex-api/internal/remotesystemd"
 	"github.com/YuriyDubinin/dijex-api/internal/repository/postgres"
 	"github.com/YuriyDubinin/dijex-api/internal/service"
@@ -114,6 +115,7 @@ func main() {
 	remoteContainersCollector := remotedocker.NewCollector()
 	remoteServicesCollector := remotesystemd.NewCollector()
 	remoteDeployRunner := remotedeploy.NewRunner()
+	remotePurgeRunner := remotepurge.NewRunner()
 	remoteLogsCollector := remotelogs.NewCollector()
 
 	// Тот же шифр используем для секретов серверов (один app-ключ на все секреты).
@@ -122,7 +124,7 @@ func main() {
 	serverService := service.NewServerService(
 		serverRepo, registryRepo, registryCipher, sshConnector, sshManager, geoResolver,
 		remoteSystemCollector, remoteContainersCollector, remoteContainersCollector, remoteServicesCollector,
-		remoteDeployRunner, remoteLogsCollector,
+		remoteDeployRunner, remotePurgeRunner, remoteLogsCollector,
 		log,
 	)
 

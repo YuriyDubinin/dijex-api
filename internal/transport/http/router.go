@@ -96,6 +96,7 @@ func NewRouter(deps Deps) http.Handler {
 			r.Post("/servers/remote/ping", deps.ServerHandler.RemotePing)
 			r.Post("/servers/remote/install-ssh", deps.ServerHandler.InstallKey)
 			r.Post("/servers/remote/deploy", deps.ServerHandler.Deploy)
+			r.Post("/servers/remote/images/purge", deps.ServerHandler.PurgeImage)
 			r.Post("/servers/remote/system/main", deps.ServerHandler.RemoteSystemMain)
 			r.Post("/servers/remote/system/containers/list", deps.ServerHandler.RemoteSystemContainers)
 			r.Post("/servers/remote/system/containers/logs", deps.ServerHandler.RemoteContainerLogs)

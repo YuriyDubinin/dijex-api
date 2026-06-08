@@ -18,6 +18,7 @@ import (
 	"github.com/YuriyDubinin/dijex-api/internal/remotedeploy"
 	"github.com/YuriyDubinin/dijex-api/internal/remoteinfo"
 	"github.com/YuriyDubinin/dijex-api/internal/remotelogs"
+	"github.com/YuriyDubinin/dijex-api/internal/remotepurge"
 	"github.com/YuriyDubinin/dijex-api/internal/sshclient"
 	"github.com/YuriyDubinin/dijex-api/internal/sshkey"
 	"github.com/YuriyDubinin/dijex-api/internal/systemd"
@@ -75,6 +76,12 @@ type remoteDeployer interface {
 	Run(ctx context.Context, client *ssh.Client, params remotedeploy.DeployParams) *remotedeploy.DeployResult
 }
 
+// remotePurger — контракт зачистки образа и его контейнеров на удалённом
+// сервере. Реализуется *remotepurge.Runner. nil допустим.
+type remotePurger interface {
+	Run(ctx context.Context, client *ssh.Client, params remotepurge.PurgeParams) *remotepurge.PurgeResult
+}
+
 // serverKeyProvider — контракт получения публичного ключа приложения.
 // Реализуется *sshkey.Manager.
 type serverKeyProvider interface {
@@ -107,6 +114,7 @@ type ServerService struct {
 	imagesRemote     remoteImagesCollector     // nil допустим
 	servicesRemote   remoteServicesCollector   // nil допустим
 	deployer         remoteDeployer            // nil допустим
+	purger           remotePurger              // nil допустим
 	logsRemote       remoteLogsCollector       // nil допустим
 	logger           *slog.Logger
 	clock            func() time.Time
@@ -124,6 +132,7 @@ func NewServerService(
 	imagesRemote remoteImagesCollector,
 	servicesRemote remoteServicesCollector,
 	deployer remoteDeployer,
+	purger remotePurger,
 	logsRemote remoteLogsCollector,
 	logger *slog.Logger,
 ) *ServerService {
@@ -139,6 +148,7 @@ func NewServerService(
 		imagesRemote:     imagesRemote,
 		servicesRemote:   servicesRemote,
 		deployer:         deployer,
+		purger:           purger,
 		logsRemote:       logsRemote,
 		logger:           logger,
 		clock:            time.Now,
@@ -607,6 +617,122 @@ func (s *ServerService) Deploy(ctx context.Context, in DeployInput) (*DeployOutp
 		CheckedAt: now,
 		Result:    result,
 	}, nil
+}
+
+// PurgeImage — симметричная к Deploy операция: сносит ВСЕ контейнеры, использующие
+// указанный image:tag, и удаляет сам образ с удалённой машины. Цепочка:
+// find → stop → rm → rmi → verify. Никакого login (не нужно, мы только чистим).
+//
+// Возвращает ошибку метода ТОЛЬКО при проблемах конфигурации/валидации.
+// Сетевые проблемы, упавшие шаги — это 200 OK с подробностями.
+func (s *ServerService) PurgeImage(ctx context.Context, in PurgeImageInput) (*PurgeImageOutput, error) {
+	if s.purger == nil {
+		return nil, fmt.Errorf("server: purger is not configured")
+	}
+
+	// 1) Валидация.
+	if in.ServerID == uuid.Nil {
+		return nil, domain.ValidationErrors{
+			&domain.ValidationError{Field: "server_id", Message: "is required"},
+		}
+	}
+	if in.RegistryID == uuid.Nil {
+		return nil, domain.ValidationErrors{
+			&domain.ValidationError{Field: "registry_id", Message: "is required"},
+		}
+	}
+
+	// 2) Загружаем registry — нужен только URL+Namespace для image_ref,
+	// credentials для purge не используются (мы не логинимся).
+	reg, err := s.registryRepo.GetByID(ctx, in.RegistryID)
+	if err != nil {
+		return nil, err // domain.ErrNotFound включительно
+	}
+
+	// 3) Собираем параметры + валидируем.
+	params := remotepurge.PurgeParams{
+		RegistryHost:      normalizeRegistryHost(reg.URL),
+		RegistryNamespace: reg.Namespace,
+		Image:             in.Image,
+		Tag:               in.Tag,
+		ContainerName:     in.ContainerName,
+	}
+	if verr := remotepurge.ValidateParams(params); verr != nil {
+		return nil, domain.ValidationErrors{
+			&domain.ValidationError{Field: "params", Message: verr.Error()},
+		}
+	}
+
+	// 4) SSH.
+	client, method, failRes, err := s.openRemoteSession(ctx, in.ServerID)
+	if err != nil {
+		return nil, err
+	}
+	if client == nil {
+		now := s.clock()
+		s.logger.Info("server purge", "server_id", in.ServerID, "status", failRes.Status, "connected", false)
+		return &PurgeImageOutput{
+			ID:        in.ServerID,
+			Connected: false,
+			Status:    failRes.Status,
+			Message:   failRes.Message,
+			CheckedAt: now,
+		}, nil
+	}
+	defer client.Close()
+
+	// 5) Выполняем шаги.
+	result := s.purger.Run(ctx, client, params)
+
+	now := s.clock()
+	statusForDB := sshclient.StatusOK
+	errMsgForDB := ""
+	if !result.Success {
+		statusForDB = sshclient.StatusError
+		errMsgForDB = "purge failed: " + firstFailedPurgeStep(result)
+	}
+	if uerr := s.repo.UpdateConnectionStatus(ctx, in.ServerID, statusForDB, errMsgForDB, now, nil); uerr != nil {
+		s.logger.Warn("update server connection status", "err", uerr, "server_id", in.ServerID)
+	}
+
+	s.logger.Info("server purge",
+		"server_id", in.ServerID,
+		"registry_id", in.RegistryID,
+		"image_ref", result.ImageRef,
+		"container_name", result.ContainerName,
+		"success", result.Success,
+		"duration_ms", result.DurationMS,
+	)
+
+	msg := "purge succeeded: " + result.ImageRef
+	if !result.Success {
+		msg = "purge failed: " + firstFailedPurgeStep(result)
+	}
+	return &PurgeImageOutput{
+		ID:        in.ServerID,
+		Connected: true,
+		Method:    method,
+		Status:    statusForDB,
+		Message:   msg,
+		CheckedAt: now,
+		Result:    result,
+	}, nil
+}
+
+// firstFailedPurgeStep — короткое описание первого упавшего шага для UI/логов.
+func firstFailedPurgeStep(r *remotepurge.PurgeResult) string {
+	if r == nil {
+		return "unknown error"
+	}
+	for _, s := range r.Steps {
+		if s.Status == remotepurge.StatusFailed {
+			return s.Name + ": " + s.Message
+		}
+	}
+	if !r.Available {
+		return r.Reason
+	}
+	return "unknown error"
 }
 
 // normalizeRegistryHost вырезает схему (http/https) и trailing slash из URL
